@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+
 class AnomalyLayer(nn.Module):
     def __init__(self, dim):
         super(AnomalyLayer, self).__init__()
@@ -58,9 +59,9 @@ class graph_deviation_network(torch.nn.Module):
     def __init__(self, args, device):
         super(graph_deviation_network, self).__init__()
         self.net = AnomalyLayer(args.hidden_dim)
-        #self.xnet = AnomalyLayerAttention(args.hidden_dim,2)
-        self.memory_size = args.memory_size # 5000 # 4000
-        self.sample_size = args.sample_size # 2000 # 1000
+
+        self.memory_size = args.memory_size 
+        self.sample_size = args.sample_size 
         self.device = device
         self.memory = torch.randn_like(torch.zeros(self.memory_size, dtype=torch.float32, requires_grad=False)).to(device)
         self.time_memory = torch.zeros(self.memory_size, dtype=torch.float32, requires_grad=False).to(device)
@@ -68,15 +69,13 @@ class graph_deviation_network(torch.nn.Module):
         self.fc1 = torch.nn.Linear(1, 1)
 
     def dev_loss(self, y_true, y_prediction, current_time):
-        '''
-        add time decay
-        '''
-        #print(y_true,y_prediction,current_time)
+
+
         index = torch.LongTensor(random.sample(range(self.memory_size), self.sample_size)).to(self.device)
         ref = torch.index_select(self.memory, 0, index)
         ref_time = torch.index_select(self.time_memory, 0, index)
 
-        lambda_t = 1 / 3600
+        lambda_t = 1e-7
         time_diff = (torch.abs(current_time.reshape([-1, 1]) - ref_time.reshape([1,-1])) )
         w_time = 1 / (torch.log(lambda_t * time_diff +1) +1)
         
@@ -96,7 +95,7 @@ class graph_deviation_network(torch.nn.Module):
         index = torch.LongTensor(random.sample(range(self.memory_size), self.sample_size)).to(self.device)
         ref = torch.index_select(self.memory, 0, index)
         ref_time = torch.index_select(self.time_memory, 0, index)
-        lambda_t = 1 / 3600
+        lambda_t = 1e-7
         time_diff = (torch.abs(current_time.reshape([-1, 1]) - ref_time.reshape([1, -1])))
         w_time = 1 / (torch.log(lambda_t * time_diff + 1) + 1)
 
@@ -108,7 +107,7 @@ class graph_deviation_network(torch.nn.Module):
         dev = (y_prediction - torch.mean(ref)) / torch.std(ref)
 
 
-        ###multi group
+
         group = torch.where(dev > -3, torch.ones_like(y_prediction), torch.zeros_like(y_prediction))
         group = torch.where(dev > -2, group+1, group)
         group = torch.where(dev > -1, group + 1, group)
@@ -121,9 +120,7 @@ class graph_deviation_network(torch.nn.Module):
 
     def forward(self, x1, x2, time, label=None):
         ana_score = self.net(x1, x2)
-        #ssss =  self.xnet(x1,x2)
-        #print(ana_score)
-        #print(ssss)
+
         if self.training:
             record_mem = (ana_score.clone().detach())[label <= 0]
             record_time_mem = (time.clone().detach())[label <= 0]
