@@ -1,17 +1,42 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import util.datasets as dataset
+import datasets as dataset
 import torch.utils.data
 import sklearn
 import numpy as np
 from option import args
 from model.tgat import TGAT
-from util.utils import EarlyStopMonitor, logger_config
+from utils import EarlyStopMonitor, logger_config
 from tqdm import tqdm
 import datetime, os
 import json
 
+
+import random
+
+import numpy as np
+import torch.backends.cudnn as cudnn
+
+seed = 41
+def set_random_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    cudnn.deterministic = True
+    cudnn.benchmark = False
+
+    # 如果在使用 DataLoader 并且采用了多进程加载数据的方式
+    #torch.set_deterministic(True)
+
+# 在训练开始前设置随机种子
+set_random_seed(seed)
+
+def worker_init_fn(worker_id, seed):
+    worker_seed = seed + worker_id
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 rel2id = {
  1: 'EVENT_WRITE',
@@ -22,8 +47,11 @@ rel2id = {
  6: 'EVENT_SENDTO',
  7: 'EVENT_RECVFROM',
 }
-with open('./dataset/pre_data/node_map.json', 'r', encoding='utf-8') as file:
+
+with open('./dataset/node_map.json', 'r', encoding='utf-8') as file:
     node_map = json.load(file)
+
+crossentropyloss = nn.CrossEntropyLoss()
 
 def cal_pos_edges_loss_multiclass(link_pred_ratio,labels):
     loss=[]
@@ -31,26 +59,12 @@ def cal_pos_edges_loss_multiclass(link_pred_ratio,labels):
         loss.append(crossentropyloss(link_pred_ratio[i].reshape(1,-1),labels[i].reshape(-1)))
     return torch.tensor(loss)
 
-crossentropyloss = nn.CrossEntropyLoss()
-def create_dataloader(dataset_type, config, collate_fn):
-    datasets = dataset.DygDataset(config, dataset_type, 
-                                 [(1522728000000000000, 1522987200000000000),
-                                  (1522987200000000000, 1523073600000000000),
-                                  (1523073600000000000, 1523073600000000000)])
-    return torch.utils.data.DataLoader(
-        dataset=datasets,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=config.num_data_workers,
-        pin_memory=True,
-        collate_fn=collate_fn.dyg_collate_fn
-    )
 
-# 创建 DataLoader
 
 
 def criterion(prediction_dict, labels, model, config):
     loss_anomaly_list = []
+    loss_supc_list = []
     loss_list = []
 
     for key, value in prediction_dict.items():
@@ -65,16 +79,22 @@ def criterion(prediction_dict, labels, model, config):
     loss_classify = torch.mean(loss_classify)
 
     loss_anomaly = torch.Tensor(0).to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+    loss_supc = torch.Tensor(0).to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
 
-    loss_anomaly = model.gdn.dev_loss(torch.squeeze(labels), torch.squeeze(prediction_dict['anom_score']), torch.squeeze(prediction_dict['time']))
+
+    loss_anomaly = model.gdn.dev_loss(torch.squeeze(prediction_dict['pre_lable']), torch.squeeze(prediction_dict['anom_score']), torch.squeeze(prediction_dict['time']))
     loss_anomaly_list += loss_anomaly
+    loss_anomaly = torch.mean(loss_anomaly)
+    loss_supc = model.suploss(prediction_dict['root_embedding'],prediction_dict['dst_embedding'] ,prediction_dict['group'], prediction_dict['dev'])
+    loss_supc_list += loss_supc
+    loss_supc = loss_supc.mean()
+
     
 
-    return loss_list, loss_anomaly_list
-
+    return loss_list, loss_anomaly_list, loss_supc_list
 
 def eval_epoch(dataset, model, config, device, name):
-    with open('./dataset/nodeid2msg', 'r', encoding='utf-8') as file:
+    with open('./dataset/nodeid2msg.json', 'r', encoding='utf-8') as file:
         nodeid2msg = json.load(file)
     edge_list = []
     with torch.no_grad():
@@ -92,8 +112,7 @@ def eval_epoch(dataset, model, config, device, name):
                     batch_sample['labels'].to(device)
                 )
                 y = batch_sample['labels'].to(device)
-                link_loss, anomaly_loss= criterion(x, y, model, config)
-                # idx_mapping = batch_sample['idx_mapping']
+                link_loss, anomaly_loss,supc_loss = criterion(x, y, model, config)
                 src_old_idx = batch_sample['old_src_center_node_idx']
                 dst_old_idx = batch_sample['old_dst_center_node_idx']
                 current_time = batch_sample['current_time']
@@ -104,42 +123,41 @@ def eval_epoch(dataset, model, config, device, name):
 
                     edge_time = int(current_time[i].item())
 
-                    srcmsg = str(nodeid2msg[srcnode])
-                    dstmsg = str(nodeid2msg[dstnode])
+                    srcmsg = str(nodeid2msg[str(srcnode)])
+                    dstmsg = str(nodeid2msg[str(dstnode)])
 
                     edge_type = rel2id[int(edgetype_id[i].item()) + 1]
 
                     link = link_loss[i]
                     anomaly = anomaly_loss[i]
+                    supc = supc_loss[i]
                     temp_dic = {}
-                    temp_dic['loss'] = {'link_loss': float(link), 'anomaly_loss': float(anomaly) }
+                    temp_dic['loss'] = {'link_loss': float(link), 'anomaly_loss': float(anomaly), 'supc_loss': float(supc) }
                     temp_dic['srcnode'] = srcnode
                     temp_dic['dstnode'] = dstnode
                     temp_dic['srcmsg'] = srcmsg
                     temp_dic['dstmsg'] = dstmsg
                     temp_dic['edge_type'] = edge_type
                     temp_dic['time'] = edge_time
+
                     edge_list.append(temp_dic)
                 t.update(1)
           
-    with open('edge_loss_{}.json'.format(name), 'w', encoding='utf-8') as json_file:
+    with open('./result/edge_loss/edge_loss_{}.json'.format(name), 'w', encoding='utf-8') as json_file:
         json.dump(edge_list, json_file, ensure_ascii=False)
 
     return 
 
+
+
+
+
+
 config = args
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# log file name set
-now_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-log_base_path = f"{os.getcwd()}/train_log"
-file_list = os.listdir(log_base_path)
-max_num = [0] # [int(fl.split("_")[0]) for fl in file_list if len(fl.split("_"))>2] + [-1]
-log_base_path = f"{log_base_path}/{max(max_num)+1}_{now_time}"
-# log and path
-get_checkpoint_path = lambda epoch: f'{log_base_path}saved_checkpoints/{args.data_set}-{args.mode}-{args.module_type}-{args.mask_ratio}-{epoch}.pth'
-logger = logger_config(log_path=f'{log_base_path}/log.txt', logging_name='TFLAG')
-logger.info(config)
 
+dataset_valid = dataset.DygDataset(config, 'valid',[(1522728000000000000,1522987200000000000),(1522987200000000000,1523073600000000000),(1523073600000000000,1523073600000000000)])
+dataset_test = dataset.DygDataset(config, 'test',[(1522728000000000000,1522987200000000000),(1522987200000000000,1523073600000000000),(1523073600000000000,1523073600000000000)])
 gpus = None if config.gpus == 0 else config.gpus
 
 collate_fn = dataset.Collate(config)
@@ -148,12 +166,30 @@ backbone = TGAT(config, device)
 model = backbone.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
-loader_train = create_dataloader('train', config, collate_fn)
-loader_valid = create_dataloader('valid', config, collate_fn)
-loader_test = create_dataloader('test', config, collate_fn)
+print(len(dataset_test))
+
+loader_valid = torch.utils.data.DataLoader(
+    dataset=dataset_valid,
+    batch_size=config.batch_size,
+    shuffle=False,
+    #shuffle=True,
+    num_workers=config.num_data_workers,
+    collate_fn=collate_fn.dyg_collate_fn,
+    worker_init_fn=lambda worker_id: worker_init_fn(worker_id, seed)
+)
 
 
-model.load_state_dict(torch.load('./checkpoint-4'))
+loader_test = torch.utils.data.DataLoader(
+    dataset=dataset_test,
+    batch_size=config.batch_size,
+    shuffle=False,
+    #shuffle=True,
+    num_workers=config.num_data_workers,
+    collate_fn=collate_fn.dyg_collate_fn,
+    worker_init_fn=lambda worker_id: worker_init_fn(worker_id, seed)
+)
+
+model.load_state_dict(torch.load('./checkpoint-2'))
 
 eval_epoch(loader_test, model, config, device, 'test')
 eval_epoch(loader_valid, model, config, device, 'val')
