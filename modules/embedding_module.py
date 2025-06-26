@@ -7,6 +7,7 @@ from modules.temporal_attention import TemporalAttentionLayer2
 
 
 
+
 class EmbeddingModule(nn.Module):
   def __init__(self, time_encoder, n_layers,
                node_features_dims, edge_features_dims, time_features_dim, hidden_dim, dropout):
@@ -33,13 +34,7 @@ class GraphEmbedding(EmbeddingModule):
 
 
   def compute_embedding(self, neigh_edge, edge_to_time, edge_feat, node_feat, edge_mask=None, sample_ratio=None):
-    '''
-    :param neigh_edge:  [E, 2]
-    :param edge_to_time:  [E]
-    :param edge_feat:  [E, D]
-    :param node_feat: [N, D]
-    :return:
-    '''
+
 
     n_layers = self.n_layers
     assert (n_layers >= 0)
@@ -101,7 +96,7 @@ class GraphAttentionEmbedding(GraphEmbedding):
 
 
 
-def get_embedding_module(time_encoder, n_layers,
+def get_embedding_module(module_type, time_encoder, n_layers,
                          node_features_dims, edge_features_dims, time_features_dim,
                          hidden_dim, n_heads=2, dropout=0.1):
 
