@@ -5,10 +5,7 @@ from torch import nn
 from modules.utils import MergeLayer
 
 class TemporalAttentionLayer2(torch.nn.Module):
-  """
-  Temporal attention layer. Return the temporal embedding of a node given the node itself,
-   its neighbors and the edge timestamps.
-  """
+
 
   def __init__(self, n_node_features, n_neighbors_features, n_edge_features, time_dim,
                output_dimension, n_head=2, dropout=0.1):
@@ -63,10 +60,10 @@ class TemporalAttentionLayer2(torch.nn.Module):
     res_att_sub = torch.sum(torch.multiply(q_mat, k_mat), dim=-1 )* self.scale   #[T, N]
 
 
+
     scores = self.scatter_softmax(res_att_sub, node_i)
 
-    # if self.dropout is not None:
-    #   scores = self.dropout(scores)
+
 
     v = torch.multiply(torch.unsqueeze(scores, dim=2), v_mat)
     v = torch.reshape(v, [-1, self.out_dim])
