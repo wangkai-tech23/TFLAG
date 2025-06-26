@@ -50,31 +50,6 @@ def cal_node_num(time_windows1, time_windows2):
     return time_windows1_node_num,time_windows2_node_num
 
 
-def cal_node_set_num(time_windows1, time_windows2): # 直接计算loss 前百分之十的交集
-    
-    top_10_percent_count1 = max(1, len(time_windows1) * 10 // 100)
-    top_10_percent_count2 = max(1, len(time_windows2) * 10 // 100)
-
-    # 提取前 10% 的字典
-    top_10_percent1 = time_windows1[:top_10_percent_count1]
-    top_10_percent2 = time_windows2[:top_10_percent_count2]
-
-    # 提取 srcmsg 和 dstmsg 的集合
-    nodes1 = {entry['dstmsg'] for entry in top_10_percent1}#.union({entry['dstmsg'] for entry in top_10_percent1})
-    nodes2 = {entry['dstmsg'] for entry in top_10_percent2}#.union({entry['dstmsg'] for entry in top_10_percent2})
-
-    # 找到交集
-    common_nodes = nodes1.intersection(nodes2)
-    union = nodes1.union(nodes2)
-    jaccard_similarity = len(common_nodes) / len(union)
-    nodes1 = set(nodes1)
-    nodes2 = set(nodes2)
-    #print("Common nodes in top 5%:", common_nodes)
-    #print("前百分之五的独特节点数量，异常：",len(nodes1),"将要检测的:",len(nodes2))
-    #print("node nums:",len(common_nodes))
-    #print("笛卡尔系数",jaccard_similarity)
-
-    return common_nodes
 
 def cal_node_set_num_2(time_windows1, time_windows2): # 直接计算频率低的前十 的交集
     time_windows1_node_num,time_windows2_node_num = cal_node_num(time_windows1, time_windows2)
@@ -105,46 +80,40 @@ def cal_node_set_num_2(time_windows1, time_windows2): # 直接计算频率低的
     return jaccard_similarity
 
 
-def cal_windows_time(name):
+
+with open('node_num.json', 'r', encoding='utf-8') as file:
+    node_num = json.load(file)
+with open('windows_max_edge_loss.json', 'r', encoding='utf-8') as file:
+    windows_edge_verage_loss_list = json.load(file)
 
 
-    with open('./edge_loss_{}.json'.format(name), 'r', encoding='utf-8') as file:
-        edge_loss_test = json.load(file)
+
+sorted_loss_data = sorted(windows_edge_verage_loss_list.items(), key=lambda x: x[1]["link_loss"], reverse=True)[:10]
+loss_with_frequency = []
+
+for timestamp, details in sorted_loss_data:
+    
+    srcmsg_freq = node_num.get(details["srcmsg"], float('inf'))
+    dstmsg_freq = node_num.get(details["dstmsg"], float('inf'))
+    total_frequency = srcmsg_freq + dstmsg_freq
+    loss_with_frequency.append({
+        "timestamp": timestamp,
+        "link_loss": details["link_loss"],
+        "srcmsg": details["srcmsg"],
+        "dstmsg": details["dstmsg"],
+        "total_frequency": total_frequency
+    })
+sorted_by_frequency = sorted(loss_with_frequency, key=lambda x: x["total_frequency"])
+
+# 选择频率最低的那个作为异常第一的 JSON
+first_json = sorted_by_frequency[0]
 
 
-
-    # The size of time window, 60000000000 represent 1 min in nanoseconds.
-    # The default setting is 15 minutes.
-    time_window_size = 60000000000 * 15
-    # 初始时间
-    start_time = edge_loss_test[0]['time']
-
-    grouped_data = []
-    current_group = []
-
-    # 遍历所有数据
-    for entry in edge_loss_test:
-        # 如果当前entry的时间在当前组的时间窗口内，则将其添加到当前组
-        if entry['time'] < start_time + time_window_size:
-            current_group.append(entry)
-        else:
-            # 当前组的时间窗口结束，将当前组添加到结果中，并开始一个新的组
-            grouped_data.append(current_group)
-            current_group = [entry]
-            # 更新起始时间为当前entry的时间窗口开始时间
-            start_time = entry['time']
-
-    # 最后一个组如果有数据，也要添加到结果中
-    if current_group:
-        grouped_data.append(current_group)
-    return grouped_data
-
-
-folder_path = './dataset/time_windows/test_data/'
+folder_path = './result/time_window/test_data/'
 
 files = os.listdir(folder_path)
-index = files.index('2018-04-06 11+45+45~2018-04-06 12+00+45.json')
-
+#index = files.index('2018-04-06 11+30+45.506159616~2018-04-06 11+45+41.266142464.json')
+index = files.index(first_json['timestamp']+'.json')
 
 current_index = index
 results = [files[index]]
@@ -205,7 +174,7 @@ while current_index + 1 < len(files):
     else:
         break
 print(results)
-files2 = os.listdir('./dataset/time_windows/val_data/')
+files2 = os.listdir('./result/time_window/val_data/')
 
 all_data = files + files2
 
@@ -220,10 +189,10 @@ all_data = files + files2
 # 12:08 注入 foo 123
 # 12:08 注入 /var/log/devc xxx
 # CADETS 坠毁，外壳丢失，无注入物
-attack_list = ['2018-04-06 11+15+45~2018-04-06 11+30+41.json', 
-               '2018-04-06 11+30+45~2018-04-06 11+45+41.json', 
-               '2018-04-06 11+45+45~2018-04-06 12+00+45.json', 
-               '2018-04-06 12+00+46~2018-04-06 12+08+59.json']
+attack_list = ['2018-04-06 11+15+45.026177792~2018-04-06 11+30+41.316160512.json', 
+               '2018-04-06 11+30+45.506159616~2018-04-06 11+45+41.266142464.json', 
+               '2018-04-06 11+45+45.926139136~2018-04-06 12+00+45.476120064.json', 
+               '2018-04-06 12+00+46.406118912~2018-04-06 12+08+59.086108928.json']
 pred_lable = []
 lables = []
 for file in all_data:
